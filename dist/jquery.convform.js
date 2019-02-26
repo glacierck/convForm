@@ -1,21 +1,52 @@
 function SingleConvState(input){
     this.input = input;
+    this.answer = '';
     this.next = false;
     return this;
-}
+};
 SingleConvState.prototype.hasNext = function(){
     return this.next;
 };
-function ConvState(wrapper, SingleConvState, form) {
+function ConvState(wrapper, SingleConvState, form, params, originalFormHtml) {
     this.form = form;
     this.wrapper = wrapper;
     this.current = SingleConvState;
     this.answers = {};
+    this.parameters = params;
+    this.originalFormHtml = originalFormHtml;
     this.scrollDown = function() {
         $(this.wrapper).find('#messages').stop().animate({scrollTop: $(this.wrapper).find('#messages')[0].scrollHeight}, 600);
     }.bind(this);
-}
+};
+ConvState.prototype.destroy = function(){
+    if(this.originalFormHtml) {
+        $(this.wrapper).html(this.originalFormHtml);
+        return true;
+    }
+    return false;
+};
+ConvState.prototype.newState = function(options) {
+    var input = $.extend(true, {}, {
+        name: '',
+        noAnswer: false,
+        required: true,
+        questions: ['You forgot the question!'],
+        type: 'text',
+        multiple: false,
+        selected: "",
+        answers: []
+    }, options);
+    input.element = $('<input type="text" name="'+input.name+'"/>');
+    return new SingleConvState(input);
+};
 ConvState.prototype.next = function(){
+    // if(this.current.input.hasOwnProperty('callback')) {
+    //     if(typeof this.current.input.callback === 'string') {
+    //         window[this.current.input.callback](this);
+    //     } else {
+    //         this.current.input.callback(this);
+    //     }
+    // }
     if(this.current.hasNext()){
         this.current = this.current.next;
         if(this.current.input.hasOwnProperty('fork') && this.current.input.hasOwnProperty('case')){
@@ -56,11 +87,7 @@ ConvState.prototype.printQuestion = function(){
             }
         }
     }
-    var messageObj = $('<div class="message to typing"><div class="typing_loader"></div></div>');
-    setTimeout(function(){
-        $(this.wrapper).find('#messages').append(messageObj);
-        this.scrollDown();
-    }.bind(this), 100);
+    var messageObj = $(this.wrapper).find('.message.typing');
     setTimeout(function(){
         messageObj.html(question);
         messageObj.removeClass('typing').addClass('ready');
@@ -68,19 +95,24 @@ ConvState.prototype.printQuestion = function(){
             this.printAnswers(this.current.input.answers, this.current.input.multiple);
         }
         this.scrollDown();
-        if(this.current.input.hasOwnProperty('noAnswer')) {
+        if(this.current.input.hasOwnProperty('noAnswer') && this.current.input.noAnswer===true) {
             if(this.next()){
                 setTimeout(function(){
+                    var messageObj = $('<div class="message to typing"><div class="typing_loader"></div></div>');
+                    $(this.wrapper).find('#messages').append(messageObj);
+                    this.scrollDown();
                     this.printQuestion();
                 }.bind(this),200);
             } else {
-                this.form.submit();
+                this.parameters.eventList.onSubmitForm(this);
             }
         }
-        $(this.wrapper).find('#userInput').focus();
+        $(this.wrapper).find(this.parameters.inputIdHashTagName).focus();
     }.bind(this), 500);
 };
 ConvState.prototype.printAnswers = function(answers, multiple){
+    var opened = false;
+    if(this.wrapper.find('div.options').height()!=0) opened = true;
     this.wrapper.find('div.options div.option').remove();
     if(multiple){
         for(var i in answers){
@@ -88,6 +120,7 @@ ConvState.prototype.printAnswers = function(answers, multiple){
                 var option = $('<div class="option">'+answers[i].text+'</div>')
                     .data("answer", answers[i])
                     .click(function(event){
+                        if(!Array.isArray(this.current.input.selected)) this.current.input.selected = [];
                         var indexOf = this.current.input.selected.indexOf($(event.target).data("answer").value);
                         if(indexOf == -1){
                             this.current.input.selected.push($(event.target).data("answer").value);
@@ -96,6 +129,8 @@ ConvState.prototype.printAnswers = function(answers, multiple){
                             this.current.input.selected.splice(indexOf, 1);
                             $(event.target).removeClass('selected');
                         }
+                        this.wrapper.find(this.parameters.inputIdHashTagName).removeClass('error');
+                        this.wrapper.find(this.parameters.inputIdHashTagName).val('');
                         if(this.current.input.selected.length > 0) {
                             this.wrapper.find('button.submit').addClass('glow');
                         } else {
@@ -113,22 +148,22 @@ ConvState.prototype.printAnswers = function(answers, multiple){
                     .data("answer", answers[i])
                     .click(function(event){
                         this.current.input.selected = $(event.target).data("answer").value;
+                        this.wrapper.find(this.parameters.inputIdHashTagName).removeClass('error');
+                        this.wrapper.find(this.parameters.inputIdHashTagName).val('');
                         this.answerWith($(event.target).data("answer").text, $(event.target).data("answer"));
                         this.wrapper.find('div.options div.option').remove();
                     }.bind(this));
-                if(answers[i].hasOwnProperty('callback')){
-                  var callback = answers[i].callback;
-                	option.click(function(event){
-                		window[this]();
-                	}.bind(callback));
-                }
                 this.wrapper.find('div.options').append(option);
                 $(window).trigger('dragreset');
             }
         }
     }
-    var diff = $(this.wrapper).find('div.options').height();
-    $(this.wrapper).find('#messages').css({paddingBottom: diff});
+    if(!opened) {
+        var diff = $(this.wrapper).find('div.options').height();
+        var originalHeight = $(this.wrapper).find('.wrapper-messages').height();
+        $(this.wrapper).find('.wrapper-messages').data('originalHeight', originalHeight);
+        $(this.wrapper).find('.wrapper-messages').css({marginBottom: diff, maxHeight: originalHeight-diff});
+    }
 
 };
 ConvState.prototype.answerWith = function(answerText, answerObject) {
@@ -139,9 +174,11 @@ ConvState.prototype.answerWith = function(answerText, answerObject) {
             if(this.current.input.type == 'tel')
                 answerObject = answerObject.replace(/\s|\(|\)|-/g, "");
             this.answers[this.current.input.name] = {text: answerText, value: answerObject};
-            console.log('previous answer: ', answerObject);
+            this.current.answer = {text: answerText, value: answerObject};
+            //console.log('previous answer: ', answerObject);
         } else {
             this.answers[this.current.input.name] = answerObject;
+            this.current.answer = answerObject;
         }
         if(this.current.input.type == 'select' && !this.current.input.multiple) {
             $(this.current.input.element).val(answerObject.value).change();
@@ -159,27 +196,71 @@ ConvState.prototype.answerWith = function(answerText, answerObject) {
 
 
     var diff = $(this.wrapper).find('div.options').height();
-    $(this.wrapper).find('#messages').css({paddingBottom: diff});
-    $(this.wrapper).find("#userInput").focus();
+    var originalHeight = $(this.wrapper).find('.wrapper-messages').data('originalHeight');
+    $(this.wrapper).find('.wrapper-messages').css({marginBottom: diff, maxHeight: originalHeight});
+    $(this.wrapper).find(this.parameters.inputIdHashTagName).focus();
+    if (answerObject.hasOwnProperty('callback')) {
+        this.current.input['callback'] = answerObject.callback;
+    }
     setTimeout(function(){
         $(this.wrapper).find("#messages").append(message);
         this.scrollDown();
-    }.bind(this), 300);
+    }.bind(this), 100);
 
     $(this.form).append(this.current.input.element);
-    //goes to next state and prints question
-    if(this.next()){
-        setTimeout(function(){
-            this.printQuestion();
-        }.bind(this), 300);
-    } else {
-        this.form.submit();
-    }
+    var messageObj = $('<div class="message to typing"><div class="typing_loader"></div></div>');
+    setTimeout(function(){
+        $(this.wrapper).find('#messages').append(messageObj);
+        this.scrollDown();
+    }.bind(this), 150);
+
+    this.parameters.eventList.onInputSubmit(this, function(){
+        //goes to next state and prints question
+        if(this.next()){
+            setTimeout(function(){
+                this.printQuestion();
+            }.bind(this), 300);
+        } else {
+            this.parameters.eventList.onSubmitForm(this);
+        }
+    }.bind(this));
 };
 
 (function($){
-    $.fn.convform = function(placeholder){
+    $.fn.convform = function(options){
         var wrapper = this;
+        var originalFormHtml = $(wrapper).html();
+        $(this).addClass('conv-form-wrapper');
+
+        var parameters = $.extend(true, {}, {
+            placeHolder : 'Type Here',
+            typeInputUi : 'textarea',
+            timeOutFirstQuestion : 1200,
+            buttonClassStyle : 'icon2-arrow',
+            eventList : {
+                onSubmitForm : function(convState) {
+                    console.log('completed');
+                    convState.form.submit();
+                    return true;
+                },
+                onInputSubmit : function(convState, readyCallback) {
+                    if(convState.current.input.hasOwnProperty('callback')) {
+                        if(typeof convState.current.input.callback === 'string') {
+                            window[convState.current.input.callback](convState, readyCallback);
+                        } else {
+                            convState.current.input.callback(convState, readyCallback);
+                        }
+                    } else {
+                        readyCallback();
+                    }
+                }
+            },
+            formIdName : 'convForm',
+            inputIdName : 'userInput',
+            loadSpinnerVisible : '',
+            buttonText: '▶'
+        }, options);
+
         /*
         * this will create an array with all inputs, selects and textareas found
         * inside the wrapper, in order of appearance
@@ -187,22 +268,26 @@ ConvState.prototype.answerWith = function(answerText, answerObject) {
         var inputs = $(this).find('input, select, textarea').map(function(){
             var input = {};
             if($(this).attr('name'))
-                input['name'] = $(this).attr('name').replace(/\[|\]/g, "");
-            if($(this).attr('no-answer'))
+                input['name'] = $(this).attr('name');
+            if($(this).attr('data-no-answer'))
                 input['noAnswer'] = true;
+            if($(this).attr('required'))
+                input['required'] = true;
             if($(this).attr('type'))
                 input['type'] = $(this).attr('type');
-            input['questions'] = $(this).attr('conv-question').split("|");
-            if($(this).attr('pattern'))
-                input['pattern'] = $(this).attr('pattern');
+            input['questions'] = $(this).attr('data-conv-question').split("|");
+            if($(this).attr('data-pattern'))
+                input['pattern'] = $(this).attr('data-pattern');
+            if($(this).attr('data-callback'))
+                input['callback'] = $(this).attr('data-callback');
             if($(this).is('select')) {
                 input['type'] = 'select';
                 input['answers'] = $(this).find('option').map(function(){
                     var answer = {};
                     answer['text'] = $(this).text();
                     answer['value'] = $(this).val();
-		            if($(this).attr('callback'))
-		            	answer['callback'] = $(this).attr('callback');
+                    if($(this).attr('data-callback'))
+                        answer['callback'] = $(this).attr('data-callback');
                     return answer;
                 }).get();
                 if($(this).prop('multiple')){
@@ -213,178 +298,208 @@ ConvState.prototype.answerWith = function(answerText, answerObject) {
                     input['selected'] = "";
                 }
             }
-            if($(this).parent('div[conv-case]').length) {
-                input['case'] = $(this).parent('div[conv-case]').attr('conv-case');
-                input['fork'] = $(this).parent('div[conv-case]').parent('div[conv-fork]').attr('conv-fork');
+            if($(this).parent('div[data-conv-case]').length) {
+                input['case'] = $(this).parent('div[data-conv-case]').attr('data-conv-case');
+                input['fork'] = $(this).parent('div[data-conv-case]').parent('div[data-conv-fork]').attr('data-conv-fork');
             }
             input['element'] = this;
             $(this).detach();
             return input;
         }).get();
-        //hides original form so users cant interact with it
-        var form = $(wrapper).find('form').hide();
 
-        //var placeholder = 'Write here...';
-        //create a new form for user input
-        var inputForm = $('<form id="convForm"><div class="options dragscroll"></div><textarea id="userInput" rows="1" placeholder="'+placeholder+'"></textarea><button type="submit" class="icon2-arrow submit">⯈</button><span class="clear"></span></form>');
+        if(inputs.length) {
+            //hides original form so users cant interact with it
+            var form = $(wrapper).find('form').hide();
 
-        //appends messages wrapper and newly created form
-        $(wrapper).append('<div class="wrapper-messages"><div id="messages"></div></div>');
-        $(wrapper).append(inputForm);
+            var inputForm;
+            parameters.inputIdHashTagName = '#' + parameters.inputIdName;
 
-        //creates new single state with first input
-        var singleState = new SingleConvState(inputs[0]);
-        //creates new wrapper state with first singlestate as current and gives access to wrapper element
-        var state = new ConvState(wrapper, singleState, form);
-        //creates all new single states with inputs in order
-        for(var i in inputs) {
-            if(i != 0 && inputs.hasOwnProperty(i)){
-                singleState.next = new SingleConvState(inputs[i]);
-                singleState = singleState.next;
+            switch(parameters.typeInputUi) {
+                case 'input':
+                    inputForm = $('<form id="' + parameters.formIdName + '" class="convFormDynamic"><div class="options dragscroll"></div><input id="' + parameters.inputIdName + '" type="text" placeholder="'+ parameters.placeHolder +'" class="userInputDynamic"></><button type="submit" class="submit">'+parameters.buttonText+'</button><span class="clear"></span></form>');
+                    break;
+                case 'textarea':
+                    inputForm = $('<form id="' + parameters.formIdName + '" class="convFormDynamic"><div class="options dragscroll"></div><textarea id="' + parameters.inputIdName + '" rows="1" placeholder="'+ parameters.placeHolder +'" class="userInputDynamic"></textarea><button type="submit" class="submit">'+parameters.buttonText+'</button><span class="clear"></span></form>');
+                    break;
+                default :
+                    console.log('typeInputUi must be input or textarea');
+                    return false;
             }
-        }
 
-        //prints first question
-        state.printQuestion();
+            //appends messages wrapper and newly created form with the spinner load
+            $(wrapper).append('<div class="wrapper-messages"><div class="spinLoader ' + parameters.loadSpinnerVisible + ' "></div><div id="messages"></div></div>');
+            $(wrapper).append(inputForm);
 
-        //binds enter to answer submit and change event to search for select possible answers
-        $(inputForm).find("#userInput").keypress(function(e){
-            if(e.which == 13) {
-                var input = $(this).val();
-                e.preventDefault();
-                if(state.current.input.type=="select" && !state.current.input.multiple){
-                    var results = state.current.input.answers.filter(function(el){
-                        return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
-                    });
-                    if(results.length){
-                        state.current.input.selected = results[0];
-                        $(this).parent('form').submit();
-                    } else {
-                        state.wrapper.find('#userInput').addClass('error');
-                    }
-                } else if(state.current.input.type=="select" && state.current.input.multiple) {
-                    if(input.trim() != "") {
-                        var results = state.current.input.answers.filter(function(el){
-                            return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
-                        });
-                        if(results.length){
-                            if(state.current.input.selected.indexOf(results[0].value) == -1){
-                                state.current.input.selected.push(results[0].value);
-                                state.wrapper.find('#userInput').val("");
+            //creates new single state with first input
+            var singleState = new SingleConvState(inputs[0]);
+            //creates new wrapper state with first singlestate as current and gives access to wrapper element
+            var state = new ConvState(wrapper, singleState, form, parameters, originalFormHtml);
+            //creates all new single states with inputs in order
+            for(var i in inputs) {
+                if(i != 0 && inputs.hasOwnProperty(i)){
+                    singleState.next = new SingleConvState(inputs[i]);
+                    singleState = singleState.next;
+                }
+            }
+
+            //prints first question
+            setTimeout(function() {
+                $.when($('div.spinLoader').addClass('hidden')).done(function() {
+                    var messageObj = $('<div class="message to typing"><div class="typing_loader"></div></div>');
+                    $(state.wrapper).find('#messages').append(messageObj);
+                    state.scrollDown();
+                    state.printQuestion();
+                });
+            }, parameters.timeOutFirstQuestion);
+
+            //binds enter to answer submit and change event to search for select possible answers
+            $(inputForm).find(parameters.inputIdHashTagName).keypress(function(e){
+                if(e.which == 13) {
+                    var input = $(this).val();
+                    e.preventDefault();
+                    if(state.current.input.type=="select" && !state.current.input.multiple){
+                        if(state.current.input.required) {
+                            state.wrapper.find('#userInputBot').addClass('error');
+                        } else {
+                            var results = state.current.input.answers.filter(function (el) {
+                                return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
+                            });
+                            if (results.length) {
+                                state.current.input.selected = results[0];
+                                $(this).parent('form').submit();
                             } else {
-                                state.wrapper.find('#userInput').val("");
+                                state.wrapper.find(parameters.inputIdHashTagName).addClass('error');
+                            }
+                        }
+                    } else if(state.current.input.type=="select" && state.current.input.multiple) {
+                        if(input.trim() != "") {
+                            var results = state.current.input.answers.filter(function(el){
+                                return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
+                            });
+                            if(results.length){
+                                if(state.current.input.selected.indexOf(results[0].value) == -1){
+                                    state.current.input.selected.push(results[0].value);
+                                    state.wrapper.find(parameters.inputIdHashTagName).val("");
+                                } else {
+                                    state.wrapper.find(parameters.inputIdHashTagName).val("");
+                                }
+                            } else {
+                                state.wrapper.find(parameters.inputIdHashTagName).addClass('error');
                             }
                         } else {
-                            state.wrapper.find('#userInput').addClass('error');
+                            if(state.current.input.selected.length) {
+                                $(this).parent('form').submit();
+                            }
                         }
                     } else {
-                        if(state.current.input.selected.length) {
+                        if(input.trim()!='' && !state.wrapper.find(parameters.inputIdHashTagName).hasClass("error")) {
                             $(this).parent('form').submit();
+                        } else {
+                            $(state.wrapper).find(parameters.inputIdHashTagName).focus();
                         }
                     }
-                } else {
-                    if(input.trim()!='' && !state.wrapper.find('#userInput').hasClass("error")) {
-                        $(this).parent('form').submit();
-                    } else {
-                        $(state.wrapper).find('#userInput').focus();
-                    }
                 }
-            }
-            autosize.update($(state.wrapper).find('#userInput'));
-        }).on('input', function(e){
-            if(state.current.input.type=="select"){
-                var input = $(this).val();
-                var results = state.current.input.answers.filter(function(el){
-                    return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
-                });
-                if(results.length){
-                    state.wrapper.find('#userInput').removeClass('error');
-                    state.printAnswers(results, state.current.input.multiple);
-                } else {
-                    state.wrapper.find('#userInput').addClass('error');
-                }
-            } else if(state.current.input.hasOwnProperty('pattern')) {
-                var reg = new RegExp(state.current.input.pattern, 'i');
-                if(reg.test($(this).val())) {
-                    state.wrapper.find('#userInput').removeClass('error');
-                } else {
-                    state.wrapper.find('#userInput').addClass('error');
-                }
-            }
-        });
-
-        $(inputForm).find('button.submit').click(function(e){
-            var input = $(state.wrapper).find('#userInput').val();
-            e.preventDefault();
-            if(state.current.input.type=="select" && !state.current.input.multiple){
-                if(input == 'Escreva aqui...') input = '';
-                var results = state.current.input.answers.filter(function(el){
-                    return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
-                });
-                if(results.length){
-                    state.current.input.selected = results[0];
-                    $(this).parent('form').submit();
-                } else {
-                    state.wrapper.find('#userInput').addClass('error');
-                }
-            } else if(state.current.input.type=="select" && state.current.input.multiple) {
-                if(input.trim() != "" && input != 'Escreva aqui...') {
+                autosize.update($(state.wrapper).find(parameters.inputIdHashTagName));
+            }).on('input', function(e){
+                if(state.current.input.type=="select"){
+                    var input = $(this).val();
                     var results = state.current.input.answers.filter(function(el){
                         return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
                     });
                     if(results.length){
-                        if(state.current.input.selected.indexOf(results[0].value) == -1){
-                            state.current.input.selected.push(results[0].value);
-                            state.wrapper.find('#userInput').val("");
-                        } else {
-                            state.wrapper.find('#userInput').val("");
-                        }
+                        state.wrapper.find(parameters.inputIdHashTagName).removeClass('error');
+                        state.printAnswers(results, state.current.input.multiple);
                     } else {
-                        state.wrapper.find('#userInput').addClass('error');
+                        state.wrapper.find(parameters.inputIdHashTagName).addClass('error');
+                    }
+                } else if(state.current.input.hasOwnProperty('pattern')) {
+                    var reg = new RegExp(state.current.input.pattern, 'i');
+                    if(reg.test($(this).val())) {
+                        state.wrapper.find(parameters.inputIdHashTagName).removeClass('error');
+                    } else {
+                        state.wrapper.find(parameters.inputIdHashTagName).addClass('error');
+                    }
+                }
+            });
+
+            $(inputForm).find('button.submit').click(function(e){
+                var input = $(state.wrapper).find(parameters.inputIdHashTagName).val();
+                e.preventDefault();
+                if(state.current.input.type=="select" && !state.current.input.multiple){
+                    if(state.current.input.required && !state.current.input.selected) {
+                        return false;
+                    } else {
+                        if (input == parameters.placeHolder) input = '';
+                        var results = state.current.input.answers.filter(function (el) {
+                            return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
+                        });
+                        if (results.length) {
+                            state.current.input.selected = results[0];
+                            $(this).parent('form').submit();
+                        } else {
+                            state.wrapper.find(parameters.inputIdHashTagName).addClass('error');
+                        }
+                    }
+                } else if(state.current.input.type=="select" && state.current.input.multiple) {
+                    if(state.current.input.required && state.current.input.selected.length === 0) {
+                        return false;
+                    } else {
+                        if (input.trim() != "" && input != parameters.placeHolder) {
+                            var results = state.current.input.answers.filter(function (el) {
+                                return el.text.toLowerCase().indexOf(input.toLowerCase()) != -1;
+                            });
+                            if (results.length) {
+                                if (state.current.input.selected.indexOf(results[0].value) == -1) {
+                                    state.current.input.selected.push(results[0].value);
+                                    state.wrapper.find(parameters.inputIdHashTagName).val("");
+                                } else {
+                                    state.wrapper.find(parameters.inputIdHashTagName).val("");
+                                }
+                            } else {
+                                state.wrapper.find(parameters.inputIdHashTagName).addClass('error');
+                            }
+                        } else {
+                            if (state.current.input.selected.length) {
+                                $(this).removeClass('glow');
+                                $(this).parent('form').submit();
+                            }
+                        }
                     }
                 } else {
-                    if(state.current.input.selected.length) {
-                        $(this).removeClass('glow');
+                    if(input.trim() != '' && !state.wrapper.find(parameters.inputIdHashTagName).hasClass("error")){
                         $(this).parent('form').submit();
+                    } else {
+                        $(state.wrapper).find(parameters.inputIdHashTagName).focus();
                     }
                 }
-            } else {
-                if(input.trim() != '' && !state.wrapper.find('#userInput').hasClass("error")){
-                    $(this).parent('form').submit();
+                autosize.update($(state.wrapper).find(parameters.inputIdHashTagName));
+            });
+
+            //binds form submit to state functions
+            $(inputForm).submit(function(e){
+                e.preventDefault();
+                var answer = $(this).find(parameters.inputIdHashTagName).val();
+                $(this).find(parameters.inputIdHashTagName).val("");
+                if(state.current.input.type == 'select'){
+                    if(!state.current.input.multiple){
+                        state.answerWith(state.current.input.selected.text, state.current.input.selected);
+                    } else {
+                        state.answerWith(state.current.input.selected.join(', '), state.current.input.selected);
+                    }
                 } else {
-                    $(state.wrapper).find('#userInput').focus();
+                    state.answerWith(answer, answer);
                 }
+            });
+
+
+            if(typeof autosize == 'function') {
+                $textarea = $(state.wrapper).find(parameters.inputIdHashTagName);
+                autosize($textarea);
             }
-            autosize.update($(state.wrapper).find('#userInput'));
-        });
 
-        //binds form submit to state functions
-        $(inputForm).submit(function(e){
-            e.preventDefault();
-            var answer = $(this).find('#userInput').val();
-            $(this).find('#userInput').val("");
-            if(state.current.input.type == 'select'){
-                if(!state.current.input.multiple){
-                    state.answerWith(state.current.input.selected.text, state.current.input.selected);
-                } else {
-                    state.answerWith(state.current.input.selected.join(', '), state.current.input.selected);
-                }
-            } else {
-                state.answerWith(answer, answer);
-            }
-        });
-
-
-        if(typeof autosize == 'function') {
-            $textarea = $(state.wrapper).find('#userInput');
-            autosize($textarea);
+            return state;
+        } else {
+            return false;
         }
-
-        return state;
     }
 })( jQuery );
-
-$(function(){
-    //instantiate conversation form on .conv-form-wrapper (default class for plugin);
-    var convForm = $('.conv-form-wrapper').convform("Write here...");
-});
